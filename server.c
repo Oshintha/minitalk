@@ -6,73 +6,86 @@
 /*   By: aoshinth <aoshinth@student.hive.fi>        +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2024/11/29 23:40:31 by aoshinth          #+#    #+#             */
-/*   Updated: 2024/12/13 15:26:16 by aoshinth         ###   ########.fr       */
+/*   Updated: 2024/12/20 13:38:14 by aoshinth         ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
 #include "libft/libft.h"
 #include "libft/ft_printf.h"
 #include <signal.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
 
-#define END_TRANSMISSION '\0'
+volatile sig_atomic_t	g_current_client_pid = 0;
 
-/**
- * @brief Handles received signals (SIGUSR1 or SIGUSR2) to reconstruct characters bit by bit.
- *
- * @param signal SIGUSR1 (bit = 1) or SIGUSR2 (bit = 0)
- */
-void	handle_signal(int signal)
+void	process_bit(int signal, unsigned char *current_char, int *bit_index)
+{
+	if (signal == SIGUSR1)
+		*current_char |= (1 << (7 - *bit_index));
+	(*bit_index)++;
+}
+
+void	process_character(unsigned char *current_char, int *bit_index)
+{
+	if (*current_char == '\0')
+	{
+		ft_printf("\n");
+		*bit_index = 0;
+		*current_char = 0;
+		g_current_client_pid = 0;
+	}
+	else
+	{
+		ft_printf("%c", *current_char);
+		*bit_index = 0;
+		*current_char = 0;
+	}
+}
+
+void	ft_error_server(const char *message)
+{
+	ft_printf("%s\n", message);
+	exit(EXIT_FAILURE);
+}
+
+void	handle_signal(int signal, siginfo_t *info, void *context)
 {
 	static unsigned char	current_char = 0;
 	static int				bit_index = 0;
 
-	// Add the current bit to current_char
-	current_char |= (signal == SIGUSR1);
-	bit_index++;
-
-	// If 8 bits have been received, process the character
+	(void)context;
+	if (g_current_client_pid == 0)
+	{
+		g_current_client_pid = info->si_pid;
+	}
+	else if (info->si_pid != g_current_client_pid)
+	{
+		return ;
+	}
+	process_bit(signal, &current_char, &bit_index);
 	if (bit_index == 8)
 	{
-		if (current_char == END_TRANSMISSION)
-			ft_printf("\n"); // Print a newline if the transmission ends
-		else
-			ft_printf("%c", current_char); // Print the reconstructed character
-		fflush(stdout); // Ensure output is printed immediately
-		// Reset for the next character
-		bit_index = 0;
-		current_char = 0;
+		process_character(&current_char, &bit_index);
 	}
-	else
+	if (kill(info->si_pid, SIGUSR1) == -1)
 	{
-		// Shift left to prepare for the next bit
-		current_char <<= 1;
+		ft_error_server("Error: Failed to send acknowledgment signal.");
 	}
 }
 
-/**
- * @brief Main function: prints PID and sets up signal handling.
- *
- * @return int Always 0.
- */
-int	main(void)
+int	main(int ac, char **av)
 {
-	// Print the server PID so the client can use it
-	printf("Server PID: %d\n", getpid());
+	struct sigaction	action;
 
-	// Set up signal handlers
-	if (signal(SIGUSR1, handle_signal) == SIG_ERR ||
-		signal(SIGUSR2, handle_signal) == SIG_ERR)
-	{
-		perror("Signal error");
-		exit(EXIT_FAILURE);
-	}
-
-	// Enter an infinite loop to wait for signals
+	(void)av;
+	if (ac != 1)
+		ft_error_server("Error: wrong format\nTry again with: ./server");
+	ft_printf("Server PID: %d\nWaiting for messages...\n", getpid());
+	sigemptyset(&action.sa_mask);
+	action.sa_flags = SA_SIGINFO;
+	action.sa_sigaction = handle_signal;
+	if (sigaction(SIGUSR1, &action, NULL) == -1
+		||sigaction(SIGUSR2, &action, NULL) == -1)
+		ft_error_server("Error: Sigaction failed");
 	while (1)
 		pause();
-
 	return (0);
 }
